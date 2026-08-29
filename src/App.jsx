@@ -14,19 +14,26 @@ import {
   BellRing,
 } from "lucide-react";
 import { db, auth } from "./firebase.js";
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import { doc, onSnapshot, setDoc, collectionGroup, query, where, updateDoc } from "firebase/firestore";
 import {
   onAuthStateChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
-import { LogOut, Mail, Lock } from "lucide-react";
+import { LogOut, Mail, Lock, ShieldCheck, UserCheck } from "lucide-react";
 
 // كل مستخدم له مستند خاص فيه بالقاعدة، معزول عن باقي المستخدمين
 function getUserDocRef(uid) {
   return doc(db, "users", uid, "app-data", "beneficiaries");
 }
+
+function getProfileDocRef(uid) {
+  return doc(db, "users", uid, "profile", "info");
+}
+
+// حساب صاحبة الدفتر - لها صلاحية الموافقة على الحسابات الجديدة
+const ADMIN_UID = "GFsIqeLOFAgtPc98Kq8bu3253b42";
 
 const COLORS = {
   cover: "#16241F",
@@ -304,6 +311,7 @@ const inputStyle = {
 
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = loading, null = logged out
+  const [profile, setProfile] = useState(undefined); // undefined = loading, null = not found, object = loaded
   const [authMode, setAuthMode] = useState("login"); // login | signup
   const [authForm, setAuthForm] = useState({ email: "", password: "" });
   const [authError, setAuthError] = useState("");
@@ -319,6 +327,31 @@ export default function App() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const [pendingUsers, setPendingUsers] = useState([]);
+  const isAdmin = user && user.uid === ADMIN_UID;
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setPendingUsers([]);
+      return;
+    }
+    const q = query(collectionGroup(db, "profile"), where("approved", "==", false));
+    const unsub = onSnapshot(q, (snap) => {
+      setPendingUsers(
+        snap.docs.map((d) => ({
+          path: d.ref.path,
+          uid: d.ref.parent.parent.id,
+          email: d.data().email || "",
+        }))
+      );
+    });
+    return () => unsub();
+  }, [isAdmin]);
+
+  async function approveUser(uid) {
+    await updateDoc(getProfileDocRef(uid), { approved: true });
+  }
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u || null);
@@ -328,6 +361,21 @@ export default function App() {
 
   useEffect(() => {
     if (!user) {
+      setProfile(undefined);
+      return;
+    }
+    const unsub = onSnapshot(
+      getProfileDocRef(user.uid),
+      (snap) => {
+        setProfile(snap.exists() ? snap.data() : null);
+      },
+      () => setProfile(null)
+    );
+    return () => unsub();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || profile === undefined || profile === null || !profile.approved) {
       setItems([]);
       setLoaded(false);
       return;
@@ -373,7 +421,11 @@ export default function App() {
     setAuthLoading(true);
     try {
       if (authMode === "signup") {
-        await createUserWithEmailAndPassword(auth, authForm.email.trim(), authForm.password);
+        const cred = await createUserWithEmailAndPassword(auth, authForm.email.trim(), authForm.password);
+        await setDoc(getProfileDocRef(cred.user.uid), {
+          email: authForm.email.trim(),
+          approved: false,
+        });
       } else {
         await signInWithEmailAndPassword(auth, authForm.email.trim(), authForm.password);
       }
@@ -616,6 +668,46 @@ export default function App() {
             </button>
           </div>
         </div>
+      ) : profile === undefined ? (
+        <div style={{ color: COLORS.paper, textAlign: "center", padding: 60, fontFamily: "'IBM Plex Sans Arabic', sans-serif" }}>
+          جارِ التحميل...
+        </div>
+      ) : !profile || !profile.approved ? (
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontFamily: "'Rakkas', serif", fontSize: 26, color: COLORS.paper, marginBottom: 14 }}>
+            بانتظار الموافقة
+          </div>
+          <div style={{ fontSize: 13, color: "#C9BFA0", lineHeight: 1.9, maxWidth: 280, marginBottom: 24, fontFamily: "'IBM Plex Sans Arabic', sans-serif" }}>
+            حسابك ({user.email}) بانتظار موافقة صاحب الدفتر عشان تقدرين توصلين لبياناتك. تواصلي معه لتفعيل حسابك.
+          </div>
+          <button
+            onClick={handleLogout}
+            style={{
+              background: "rgba(244,238,220,0.1)",
+              border: "none",
+              color: "#C9BFA0",
+              borderRadius: 8,
+              padding: "10px 18px",
+              fontSize: 13,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: "pointer",
+            }}
+          >
+            <LogOut size={14} /> تسجيل الخروج
+          </button>
+        </div>
       ) : !loaded ? (
         <div style={{ color: COLORS.paper, textAlign: "center", padding: 60, fontFamily: "'IBM Plex Sans Arabic', sans-serif" }}>
           جارِ التحميل...
@@ -663,6 +755,29 @@ export default function App() {
                 >
                   <LogOut size={13} /> خروج
                 </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => setView("admin")}
+                    style={{
+                      position: "absolute",
+                      right: 16,
+                      top: 30,
+                      background: pendingUsers.length > 0 ? COLORS.stampRed : "rgba(244,238,220,0.08)",
+                      border: "none",
+                      color: pendingUsers.length > 0 ? "#FFF" : "#C9BFA0",
+                      borderRadius: 8,
+                      padding: "6px 10px",
+                      fontSize: 11,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <ShieldCheck size={13} /> إدارة الحسابات
+                    {pendingUsers.length > 0 && ` (${pendingUsers.length})`}
+                  </button>
+                )}
                 <div
                   style={{
                     textAlign: "center",
@@ -1084,6 +1199,61 @@ export default function App() {
                 >
                   {saving ? "جارِ الحفظ..." : editingId ? "حفظ التعديلات" : "إضافة المستفيد"}
                 </button>
+              </DotPaper>
+            </div>
+          )}
+
+          {view === "admin" && isAdmin && (
+            <div>
+              <TopBar title="إدارة الحسابات" onBack={() => setView("home")} />
+              <DotPaper style={{ padding: 16 }}>
+                {pendingUsers.length === 0 ? (
+                  <div style={{ textAlign: "center", color: COLORS.inkSoft, fontSize: 13, marginTop: 30 }}>
+                    ما فيه طلبات تسجيل جديدة بانتظار الموافقة
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {pendingUsers.map((u) => (
+                      <div
+                        key={u.uid}
+                        style={{
+                          background: "#FFFDF6",
+                          border: `1px solid ${COLORS.paperLine}`,
+                          borderRadius: 10,
+                          padding: "13px 14px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.ink, direction: "ltr", textAlign: "right" }}>
+                            {u.email}
+                          </div>
+                          <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>بانتظار الموافقة</div>
+                        </div>
+                        <button
+                          onClick={() => approveUser(u.uid)}
+                          style={{
+                            background: COLORS.profit,
+                            color: "#FFFDF6",
+                            border: "none",
+                            borderRadius: 8,
+                            padding: "9px 14px",
+                            fontSize: 13,
+                            fontWeight: 600,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <UserCheck size={15} /> موافقة
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </DotPaper>
             </div>
           )}
