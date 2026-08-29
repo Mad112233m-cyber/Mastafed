@@ -1,0 +1,9 @@
+{
+  "name": "دفتر المستفيدين",
+  "short_name": "دفتر المستفيدين",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#16241F",
+  "theme_color": "#16241F",
+  "orientation": "portrait"
+}
