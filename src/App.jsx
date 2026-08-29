@@ -13,11 +13,20 @@ import {
   Check,
   BellRing,
 } from "lucide-react";
-import { db } from "./firebase.js";
+import { db, auth } from "./firebase.js";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import {
+  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
+import { LogOut, Mail, Lock } from "lucide-react";
 
-// نفس الدفتر يُقرأ من نفس الوثيقة على كل الأجهزة، فالتحديث يوصل فوريًا للكل
-const DOC_REF = doc(db, "app-data", "beneficiaries");
+// كل مستخدم له مستند خاص فيه بالقاعدة، معزول عن باقي المستخدمين
+function getUserDocRef(uid) {
+  return doc(db, "users", uid, "app-data", "beneficiaries");
+}
 
 const COLORS = {
   cover: "#16241F",
@@ -294,6 +303,12 @@ const inputStyle = {
 };
 
 export default function App() {
+  const [user, setUser] = useState(undefined); // undefined = loading, null = logged out
+  const [authMode, setAuthMode] = useState("login"); // login | signup
+  const [authForm, setAuthForm] = useState({ email: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+
   const [items, setItems] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("home"); // home | list | detail | form
@@ -305,31 +320,82 @@ export default function App() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u || null);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setItems([]);
+      setLoaded(false);
+      return;
+    }
     // onSnapshot يستمع للتغييرات لحظيًا: أي جهاز يعدّل، باقي الأجهزة تتحدث تلقائيًا
     const unsubscribe = onSnapshot(
-      DOC_REF,
+      getUserDocRef(user.uid),
       (snap) => {
         if (snap.exists()) {
           setItems(snap.data().items || []);
+        } else {
+          setItems([]);
         }
         setLoaded(true);
       },
       (err) => {
-        setError("تعذر الاتصال بقاعدة البيانات، تأكدي من الإعداد بملف firebase.js");
+        setError("تعذر الاتصال بقاعدة البيانات");
         setLoaded(true);
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [user]);
 
-  const persist = useCallback(async (next) => {
-    setItems(next);
-    try {
-      await setDoc(DOC_REF, { items: next });
-    } catch (e) {
-      setError("تعذر حفظ البيانات، تأكدي من الاتصال بالإنترنت");
+  const persist = useCallback(
+    async (next) => {
+      if (!user) return;
+      setItems(next);
+      try {
+        await setDoc(getUserDocRef(user.uid), { items: next });
+      } catch (e) {
+        setError("تعذر حفظ البيانات، تأكدي من الاتصال بالإنترنت");
+      }
+    },
+    [user]
+  );
+
+  async function handleAuthSubmit() {
+    setAuthError("");
+    if (!authForm.email.trim() || !authForm.password) {
+      setAuthError("اكتبي الإيميل وكلمة المرور");
+      return;
     }
-  }, []);
+    setAuthLoading(true);
+    try {
+      if (authMode === "signup") {
+        await createUserWithEmailAndPassword(auth, authForm.email.trim(), authForm.password);
+      } else {
+        await signInWithEmailAndPassword(auth, authForm.email.trim(), authForm.password);
+      }
+    } catch (e) {
+      const map = {
+        "auth/email-already-in-use": "هذا الإيميل مسجل من قبل، جربي تسجيل الدخول",
+        "auth/invalid-email": "صيغة الإيميل غير صحيحة",
+        "auth/weak-password": "كلمة المرور لازم تكون 6 أحرف أو أكثر",
+        "auth/invalid-credential": "الإيميل أو كلمة المرور غير صحيحة",
+        "auth/user-not-found": "لا يوجد حساب بهذا الإيميل",
+        "auth/wrong-password": "كلمة المرور غير صحيحة",
+      };
+      setAuthError(map[e.code] || "صار خطأ، حاولي مرة أخرى");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    await signOut(auth);
+    setView("home");
+  }
 
   const totalGiven = items.reduce((s, i) => s + (Number(i.given) || 0), 0);
   const totalProfit = items
@@ -456,7 +522,101 @@ export default function App() {
         button { font-family: 'IBM Plex Sans Arabic', sans-serif; }
       `}</style>
 
-      {!loaded ? (
+      {user === undefined ? (
+        <div style={{ color: COLORS.paper, textAlign: "center", padding: 60, fontFamily: "'IBM Plex Sans Arabic', sans-serif" }}>
+          جارِ التحميل...
+        </div>
+      ) : !user ? (
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            padding: 24,
+          }}
+        >
+          <div style={{ textAlign: "center", marginBottom: 32 }}>
+            <div style={{ fontFamily: "'Rakkas', serif", fontSize: 30, color: COLORS.paper }}>
+              دفتر المستفيدين
+            </div>
+            <div style={{ fontSize: 12, color: "#C9BFA0", marginTop: 6, fontFamily: "'IBM Plex Sans Arabic', sans-serif" }}>
+              {authMode === "login" ? "سجّلي دخولك لمتابعة دفترك" : "أنشئي حساب جديد"}
+            </div>
+          </div>
+
+          <div style={{ background: COLORS.paper, borderRadius: 16, padding: 22 }}>
+            <Field label="الإيميل">
+              <div style={{ position: "relative" }}>
+                <input
+                  style={{ ...inputStyle, paddingLeft: 38 }}
+                  type="email"
+                  value={authForm.email}
+                  onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                  placeholder="example@email.com"
+                  dir="ltr"
+                />
+                <Mail size={16} color={COLORS.inkSoft} style={{ position: "absolute", left: 12, top: 13 }} />
+              </div>
+            </Field>
+            <Field label="كلمة المرور">
+              <div style={{ position: "relative" }}>
+                <input
+                  style={{ ...inputStyle, paddingLeft: 38 }}
+                  type="password"
+                  value={authForm.password}
+                  onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                  placeholder="6 أحرف على الأقل"
+                  dir="ltr"
+                />
+                <Lock size={16} color={COLORS.inkSoft} style={{ position: "absolute", left: 12, top: 13 }} />
+              </div>
+            </Field>
+
+            {authError && (
+              <div style={{ color: COLORS.stampRed, fontSize: 13, marginBottom: 12 }}>{authError}</div>
+            )}
+
+            <button
+              onClick={handleAuthSubmit}
+              disabled={authLoading}
+              style={{
+                width: "100%",
+                background: COLORS.ink,
+                color: COLORS.paper,
+                border: "none",
+                borderRadius: 10,
+                padding: "13px",
+                fontSize: 15,
+                fontWeight: 600,
+                cursor: authLoading ? "default" : "pointer",
+                opacity: authLoading ? 0.7 : 1,
+                marginTop: 4,
+              }}
+            >
+              {authLoading ? "جارِ التحقق..." : authMode === "login" ? "تسجيل الدخول" : "إنشاء حساب"}
+            </button>
+
+            <button
+              onClick={() => {
+                setAuthMode(authMode === "login" ? "signup" : "login");
+                setAuthError("");
+              }}
+              style={{
+                width: "100%",
+                background: "none",
+                border: "none",
+                color: COLORS.goldDeep,
+                fontSize: 13,
+                padding: 12,
+                cursor: "pointer",
+              }}
+            >
+              {authMode === "login" ? "ما عندك حساب؟ أنشئي واحد" : "عندك حساب؟ سجّلي دخول"}
+            </button>
+          </div>
+        </div>
+      ) : !loaded ? (
         <div style={{ color: COLORS.paper, textAlign: "center", padding: 60, fontFamily: "'IBM Plex Sans Arabic', sans-serif" }}>
           جارِ التحميل...
         </div>
@@ -483,6 +643,26 @@ export default function App() {
                 >
                   دفتر المستفيدين
                 </div>
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    position: "absolute",
+                    left: 16,
+                    top: 30,
+                    background: "rgba(244,238,220,0.08)",
+                    border: "none",
+                    color: "#C9BFA0",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    fontSize: 11,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  <LogOut size={13} /> خروج
+                </button>
                 <div
                   style={{
                     textAlign: "center",
