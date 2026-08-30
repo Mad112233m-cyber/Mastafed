@@ -354,25 +354,39 @@ export default function App() {
     await updateDoc(getProfileDocRef(uid), { approved: true });
   }
 
-  useEffect(() => {
-    const timer = setTimeout(() => setSlowLoad(true), 6000);
+useEffect(() => {
+  const timer = setTimeout(() => {
+    setSlowLoad(true);
+    setInitError("Firebase Auth لم يستجب خلال 6 ثواني");
+  }, 6000);
+
+  try {
     const unsub = onAuthStateChanged(
       auth,
       (u) => {
         clearTimeout(timer);
+        setInitError("");
         setUser(u || null);
       },
       (err) => {
         clearTimeout(timer);
-        setInitError(err.code ? `${err.code}: ${err.message}` : String(err));
+        setInitError(
+          err.code ? `${err.code}: ${err.message}` : String(err)
+        );
         setUser(null);
       }
     );
+
     return () => {
       unsub();
       clearTimeout(timer);
     };
-  }, []);
+  } catch (err) {
+    clearTimeout(timer);
+    setInitError(String(err));
+    setUser(null);
+  }
+}, []);
 
   useEffect(() => {
     if (!user) {
