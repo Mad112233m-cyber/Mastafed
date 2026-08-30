@@ -450,8 +450,14 @@ useEffect(() => {
           email: authForm.email.trim(),
           approved: false,
         });
-      } else {
-        await signInWithEmailAndPassword(auth, authForm.email.trim(), authForm.password);
+      }} else {
+  const cred = await signInWithEmailAndPassword(
+    auth,
+    authForm.email.trim(),
+    authForm.password
+  );
+
+  console.log("LOGIN SUCCESS:", cred.user.uid);
       }
     } catch (e) {
       const map = {
