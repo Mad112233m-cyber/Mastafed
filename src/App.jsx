@@ -310,7 +310,7 @@ const inputStyle = {
 };
 
 export default function App() {
-  const [user, setUser] = useState(undefined); // undefined = loading, null = logged out
+  const [user, setUser] = useState(null); // undefined = loading, null = logged out
   const [profile, setProfile] = useState(undefined); // undefined = loading, null = not found, object = loaded
   const [initError, setInitError] = useState("");
   const [slowLoad, setSlowLoad] = useState(false);
