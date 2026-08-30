@@ -38,7 +38,6 @@ import {
   signOut,
 } from "firebase/auth";
 
-// كل مستخدم له مستند خاص فيه بالقاعدة
 function getUserDocRef(uid) {
   return doc(db, "users", uid, "app-data", "beneficiaries");
 }
@@ -47,7 +46,6 @@ function getProfileDocRef(uid) {
   return doc(db, "users", uid, "profile", "info");
 }
 
-// حساب صاحب الدفتر
 const ADMIN_UID = "GFsIqeLOFAgtPc98Kq8bu3253b42";
 
 const COLORS = {
@@ -361,6 +359,7 @@ export default function App() {
   const [slowLoad, setSlowLoad] = useState(false);
 
   const [authMode, setAuthMode] = useState("login");
+
   const [authForm, setAuthForm] = useState({
     email: "",
     password: "",
@@ -390,6 +389,8 @@ export default function App() {
   const [saving, setSaving] = useState(false);
 
   const [pendingUsers, setPendingUsers] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState("");
 
   const isAdmin = user && user.uid === ADMIN_UID;
 
@@ -398,9 +399,7 @@ export default function App() {
     const timer = setTimeout(() => {
       if (user === undefined) {
         setSlowLoad(true);
-        setInitError(
-          "Firebase Auth لم يستجب خلال 10 ثواني"
-        );
+        setInitError("Firebase Auth لم يستجب خلال 10 ثواني");
       }
     }, 10000);
 
@@ -432,12 +431,17 @@ export default function App() {
     };
   }, []);
 
-  // طلبات الموافقة للإدمن
+  // طلبات الموافقة للأدمن
   useEffect(() => {
     if (!isAdmin) {
       setPendingUsers([]);
+      setAdminError("");
+      setAdminLoading(false);
       return;
     }
+
+    setAdminLoading(true);
+    setAdminError("");
 
     const q = query(
       collectionGroup(db, "profile"),
@@ -447,29 +451,70 @@ export default function App() {
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        setPendingUsers(
+        console.log(
+          "ADMIN PENDING USERS:",
           snap.docs.map((d) => ({
             path: d.ref.path,
-            uid: d.ref.parent.parent.id,
-            email: d.data().email || "",
+            data: d.data(),
           }))
         );
+
+        const users = snap.docs.map((d) => {
+          const parts = d.ref.path.split("/");
+
+          return {
+            path: d.ref.path,
+            uid: parts[1] || "",
+            email: d.data().email || "",
+            approved: d.data().approved,
+          };
+        });
+
+        setPendingUsers(users);
+        setAdminLoading(false);
       },
-      () => {
+      (err) => {
+        console.error("ADMIN USERS ERROR:", err);
+
         setPendingUsers([]);
+        setAdminLoading(false);
+
+        setAdminError(
+          err?.code
+            ? `${err.code}: ${err.message}`
+            : "تعذر جلب طلبات الحسابات"
+        );
       }
     );
 
     return () => unsubscribe();
   }, [isAdmin]);
 
+  // الموافقة على الحساب
   async function approveUser(uid) {
+    if (!uid) {
+      setAdminError("رقم المستخدم غير موجود");
+      return;
+    }
+
     try {
+      setAdminError("");
+
       await updateDoc(getProfileDocRef(uid), {
         approved: true,
       });
+
+      setPendingUsers((prev) =>
+        prev.filter((u) => u.uid !== uid)
+      );
     } catch (e) {
-      setError("تعذر الموافقة على الحساب");
+      console.error("APPROVE USER ERROR:", e);
+
+      setAdminError(
+        e?.code
+          ? `${e.code}: ${e.message}`
+          : "تعذر الموافقة على الحساب"
+      );
     }
   }
 
@@ -489,7 +534,8 @@ export default function App() {
             : null
         );
       },
-      () => {
+      (err) => {
+        console.error("PROFILE ERROR:", err);
         setProfile(null);
       }
     );
@@ -522,10 +568,7 @@ export default function App() {
         setLoaded(true);
       },
       () => {
-        setError(
-          "تعذر الاتصال بقاعدة البيانات"
-        );
-
+        setError("تعذر الاتصال بقاعدة البيانات");
         setLoaded(true);
       }
     );
@@ -540,12 +583,9 @@ export default function App() {
       setItems(next);
 
       try {
-        await setDoc(
-          getUserDocRef(user.uid),
-          {
-            items: next,
-          }
-        );
+        await setDoc(getUserDocRef(user.uid), {
+          items: next,
+        });
       } catch (e) {
         setError(
           "تعذر حفظ البيانات، تأكدي من الاتصال بالإنترنت"
@@ -563,9 +603,7 @@ export default function App() {
       !authForm.email.trim() ||
       !authForm.password
     ) {
-      setAuthError(
-        "اكتبي الإيميل وكلمة المرور"
-      );
+      setAuthError("اكتبي الإيميل وكلمة المرور");
       return;
     }
 
@@ -588,16 +626,10 @@ export default function App() {
           }
         );
       } else {
-        const cred =
-          await signInWithEmailAndPassword(
-            auth,
-            authForm.email.trim(),
-            authForm.password
-          );
-
-        console.log(
-          "LOGIN SUCCESS:",
-          cred.user.uid
+        await signInWithEmailAndPassword(
+          auth,
+          authForm.email.trim(),
+          authForm.password
         );
       }
     } catch (e) {
@@ -643,8 +675,7 @@ export default function App() {
   }
 
   const totalGiven = items.reduce(
-    (s, i) =>
-      s + (Number(i.given) || 0),
+    (s, i) => s + (Number(i.given) || 0),
     0
   );
 
@@ -719,9 +750,7 @@ export default function App() {
       form.given === "" ||
       isNaN(Number(form.given))
     ) {
-      setError(
-        "اكتب المبلغ المعطى بشكل صحيح"
-      );
+      setError("اكتب المبلغ المعطى بشكل صحيح");
       return;
     }
 
@@ -747,9 +776,7 @@ export default function App() {
               ...i,
               name: form.name.trim(),
               given: Number(form.given),
-              toReturn: Number(
-                form.toReturn
-              ),
+              toReturn: Number(form.toReturn),
               date: form.date,
               dueDate: form.dueDate,
               notes: form.notes,
@@ -763,9 +790,7 @@ export default function App() {
           id: uid(),
           name: form.name.trim(),
           given: Number(form.given),
-          toReturn: Number(
-            form.toReturn
-          ),
+          toReturn: Number(form.toReturn),
           date: form.date,
           dueDate: form.dueDate,
           notes: form.notes,
@@ -860,7 +885,6 @@ export default function App() {
         `}
       </style>
 
-      {/* تحميل Firebase */}
       {user === undefined ? (
         <div
           style={{
@@ -908,8 +932,7 @@ export default function App() {
                     border: "none",
                     color: COLORS.paper,
                     borderRadius: 8,
-                    padding:
-                      "8px 16px",
+                    padding: "8px 16px",
                     fontSize: 12,
                     cursor: "pointer",
                   }}
@@ -921,7 +944,6 @@ export default function App() {
           )}
         </div>
       ) : !user ? (
-        /* تسجيل الدخول */
         <div
           style={{
             minHeight: "100vh",
@@ -939,8 +961,7 @@ export default function App() {
           >
             <div
               style={{
-                fontFamily:
-                  "'Rakkas', serif",
+                fontFamily: "'Rakkas', serif",
                 fontSize: 30,
                 color: COLORS.paper,
               }}
@@ -971,11 +992,7 @@ export default function App() {
             }}
           >
             <Field label="الإيميل">
-              <div
-                style={{
-                  position: "relative",
-                }}
-              >
+              <div style={{ position: "relative" }}>
                 <input
                   style={{
                     ...inputStyle,
@@ -986,8 +1003,7 @@ export default function App() {
                   onChange={(e) =>
                     setAuthForm({
                       ...authForm,
-                      email:
-                        e.target.value,
+                      email: e.target.value,
                     })
                   }
                   placeholder="example@email.com"
@@ -998,8 +1014,7 @@ export default function App() {
                   size={16}
                   color={COLORS.inkSoft}
                   style={{
-                    position:
-                      "absolute",
+                    position: "absolute",
                     left: 12,
                     top: 13,
                   }}
@@ -1008,25 +1023,18 @@ export default function App() {
             </Field>
 
             <Field label="كلمة المرور">
-              <div
-                style={{
-                  position: "relative",
-                }}
-              >
+              <div style={{ position: "relative" }}>
                 <input
                   style={{
                     ...inputStyle,
                     paddingLeft: 38,
                   }}
                   type="password"
-                  value={
-                    authForm.password
-                  }
+                  value={authForm.password}
                   onChange={(e) =>
                     setAuthForm({
                       ...authForm,
-                      password:
-                        e.target.value,
+                      password: e.target.value,
                     })
                   }
                   placeholder="6 أحرف على الأقل"
@@ -1037,8 +1045,7 @@ export default function App() {
                   size={16}
                   color={COLORS.inkSoft}
                   style={{
-                    position:
-                      "absolute",
+                    position: "absolute",
                     left: 12,
                     top: 13,
                   }}
@@ -1049,8 +1056,7 @@ export default function App() {
             {authError && (
               <div
                 style={{
-                  color:
-                    COLORS.stampRed,
+                  color: COLORS.stampRed,
                   fontSize: 13,
                   marginBottom: 12,
                   lineHeight: 1.6,
@@ -1061,29 +1067,21 @@ export default function App() {
             )}
 
             <button
-              onClick={
-                handleAuthSubmit
-              }
+              onClick={handleAuthSubmit}
               disabled={authLoading}
               style={{
                 width: "100%",
-                background:
-                  COLORS.ink,
-                color:
-                  COLORS.paper,
+                background: COLORS.ink,
+                color: COLORS.paper,
                 border: "none",
                 borderRadius: 10,
                 padding: "13px",
                 fontSize: 15,
                 fontWeight: 600,
-                cursor:
-                  authLoading
-                    ? "default"
-                    : "pointer",
-                opacity:
-                  authLoading
-                    ? 0.7
-                    : 1,
+                cursor: authLoading
+                  ? "default"
+                  : "pointer",
+                opacity: authLoading ? 0.7 : 1,
                 marginTop: 4,
               }}
             >
@@ -1107,8 +1105,7 @@ export default function App() {
                 width: "100%",
                 background: "none",
                 border: "none",
-                color:
-                  COLORS.goldDeep,
+                color: COLORS.goldDeep,
                 fontSize: 13,
                 padding: 12,
                 cursor: "pointer",
@@ -1132,28 +1129,23 @@ export default function App() {
         >
           جارِ التحميل...
         </div>
-      ) : !profile ||
-        !profile.approved ? (
-        /* بانتظار الموافقة */
+      ) : !profile || !profile.approved ? (
         <div
           style={{
             minHeight: "100vh",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            justifyContent:
-              "center",
+            justifyContent: "center",
             padding: 24,
             textAlign: "center",
           }}
         >
           <div
             style={{
-              fontFamily:
-                "'Rakkas', serif",
+              fontFamily: "'Rakkas', serif",
               fontSize: 26,
-              color:
-                COLORS.paper,
+              color: COLORS.paper,
               marginBottom: 14,
             }}
           >
@@ -1210,28 +1202,22 @@ export default function App() {
         </div>
       ) : (
         <>
-          {/* الرئيسية */}
           {view === "home" && (
             <div>
               <div
                 style={{
                   background:
                     `linear-gradient(180deg, ${COLORS.cover}, ${COLORS.coverDeep})`,
-                  padding:
-                    "34px 20px 26px",
-                  color:
-                    COLORS.paper,
-                  position:
-                    "relative",
+                  padding: "34px 20px 26px",
+                  color: COLORS.paper,
+                  position: "relative",
                 }}
               >
                 <div
                   style={{
-                    fontFamily:
-                      "'Rakkas', serif",
+                    fontFamily: "'Rakkas', serif",
                     fontSize: 30,
-                    textAlign:
-                      "center",
+                    textAlign: "center",
                     marginBottom: 4,
                   }}
                 >
@@ -1239,30 +1225,22 @@ export default function App() {
                 </div>
 
                 <button
-                  onClick={
-                    handleLogout
-                  }
+                  onClick={handleLogout}
                   style={{
-                    position:
-                      "absolute",
+                    position: "absolute",
                     left: 16,
                     top: 30,
                     background:
                       "rgba(244,238,220,0.08)",
                     border: "none",
-                    color:
-                      "#C9BFA0",
+                    color: "#C9BFA0",
                     borderRadius: 8,
-                    padding:
-                      "6px 10px",
+                    padding: "6px 10px",
                     fontSize: 11,
-                    display:
-                      "flex",
-                    alignItems:
-                      "center",
+                    display: "flex",
+                    alignItems: "center",
                     gap: 4,
-                    cursor:
-                      "pointer",
+                    cursor: "pointer",
                   }}
                 >
                   <LogOut size={13} />
@@ -1272,57 +1250,42 @@ export default function App() {
                 {isAdmin && (
                   <button
                     onClick={() =>
-                      setView(
-                        "admin"
-                      )
+                      setView("admin")
                     }
                     style={{
-                      position:
-                        "absolute",
+                      position: "absolute",
                       right: 16,
                       top: 30,
                       background:
-                        pendingUsers.length >
-                        0
+                        pendingUsers.length > 0
                           ? COLORS.stampRed
                           : "rgba(244,238,220,0.08)",
-                      border:
-                        "none",
+                      border: "none",
                       color:
-                        pendingUsers.length >
-                        0
+                        pendingUsers.length > 0
                           ? "#FFF"
                           : "#C9BFA0",
                       borderRadius: 8,
-                      padding:
-                        "6px 10px",
+                      padding: "6px 10px",
                       fontSize: 11,
-                      display:
-                        "flex",
-                      alignItems:
-                        "center",
+                      display: "flex",
+                      alignItems: "center",
                       gap: 4,
-                      cursor:
-                        "pointer",
+                      cursor: "pointer",
                     }}
                   >
-                    <ShieldCheck
-                      size={13}
-                    />
+                    <ShieldCheck size={13} />
                     إدارة الحسابات
-                    {pendingUsers.length >
-                      0 &&
+                    {pendingUsers.length > 0 &&
                       ` (${pendingUsers.length})`}
                   </button>
                 )}
 
                 <div
                   style={{
-                    textAlign:
-                      "center",
+                    textAlign: "center",
                     fontSize: 12,
-                    color:
-                      "#C9BFA0",
+                    color: "#C9BFA0",
                     marginBottom: 24,
                   }}
                 >
@@ -1331,8 +1294,7 @@ export default function App() {
 
                 <div
                   style={{
-                    display:
-                      "flex",
+                    display: "flex",
                     gap: 12,
                   }}
                 >
@@ -1344,26 +1306,20 @@ export default function App() {
                       border:
                         "1px solid rgba(184,144,46,0.35)",
                       borderRadius: 12,
-                      padding:
-                        "14px 12px",
-                      textAlign:
-                        "center",
+                      padding: "14px 12px",
+                      textAlign: "center",
                     }}
                   >
                     <Wallet
                       size={18}
-                      color={
-                        COLORS.gold
-                      }
+                      color={COLORS.gold}
                     />
 
                     <div
                       style={{
                         fontSize: 11,
-                        color:
-                          "#C9BFA0",
-                        margin:
-                          "6px 0 4px",
+                        color: "#C9BFA0",
+                        margin: "6px 0 4px",
                       }}
                     >
                       رأس المال
@@ -1371,21 +1327,16 @@ export default function App() {
 
                     <div
                       style={{
-                        fontWeight:
-                          700,
+                        fontWeight: 700,
                         fontSize: 18,
-                        color:
-                          COLORS.gold,
+                        color: COLORS.gold,
                       }}
                     >
-                      {money(
-                        totalGiven
-                      )}{" "}
+                      {money(totalGiven)}{" "}
                       <span
                         style={{
                           fontSize: 11,
-                          fontWeight:
-                            400,
+                          fontWeight: 400,
                         }}
                       >
                         ريال
@@ -1401,10 +1352,8 @@ export default function App() {
                       border:
                         "1px solid rgba(59,107,74,0.45)",
                       borderRadius: 12,
-                      padding:
-                        "14px 12px",
-                      textAlign:
-                        "center",
+                      padding: "14px 12px",
+                      textAlign: "center",
                     }}
                   >
                     <TrendingUp
@@ -1415,10 +1364,8 @@ export default function App() {
                     <div
                       style={{
                         fontSize: 11,
-                        color:
-                          "#C9BFA0",
-                        margin:
-                          "6px 0 4px",
+                        color: "#C9BFA0",
+                        margin: "6px 0 4px",
                       }}
                     >
                       إجمالي الربح
@@ -1426,21 +1373,16 @@ export default function App() {
 
                     <div
                       style={{
-                        fontWeight:
-                          700,
+                        fontWeight: 700,
                         fontSize: 18,
-                        color:
-                          "#6FBF8B",
+                        color: "#6FBF8B",
                       }}
                     >
-                      {money(
-                        totalProfit
-                      )}{" "}
+                      {money(totalProfit)}{" "}
                       <span
                         style={{
                           fontSize: 11,
-                          fontWeight:
-                            400,
+                          fontWeight: 400,
                         }}
                       >
                         ريال
@@ -1453,653 +1395,456 @@ export default function App() {
               <DotPaper
                 style={{
                   padding: 16,
-                  display:
-                    "flex",
-                  flexDirection:
-                    "column",
+                  display: "flex",
+                  flexDirection: "column",
                   gap: 12,
                   borderTopLeftRadius: 22,
                   borderTopRightRadius: 22,
                   marginTop: -14,
                 }}
               >
-                <div
-                  style={{
-                    height: 6,
-                  }}
-                />
+                <div style={{ height: 6 }} />
 
                 <StatTile
-                  icon={
-                    <Users
-                      size={20}
-                    />
-                  }
+                  icon={<Users size={20} />}
                   label="المستفيدين"
-                  count={
-                    items.length
-                  }
-                  accent={
-                    COLORS.goldDeep
-                  }
-                  onClick={() =>
-                    openList(
-                      "all"
-                    )
-                  }
+                  count={items.length}
+                  accent={COLORS.goldDeep}
+                  onClick={() => openList("all")}
                 />
 
                 <StatTile
-                  icon={
-                    <CheckCircle2
-                      size={20}
-                    />
-                  }
+                  icon={<CheckCircle2 size={20} />}
                   label="تم السداد"
-                  count={
-                    paidCount
-                  }
-                  accent={
-                    COLORS.profit
-                  }
-                  onClick={() =>
-                    openList(
-                      "paid"
-                    )
-                  }
+                  count={paidCount}
+                  accent={COLORS.profit}
+                  onClick={() => openList("paid")}
                 />
 
                 <StatTile
-                  icon={
-                    <CircleDashed
-                      size={20}
-                    />
-                  }
+                  icon={<CircleDashed size={20} />}
                   label="لم يتم السداد"
-                  count={
-                    unpaidCount
-                  }
-                  accent={
-                    COLORS.stampRed
-                  }
-                  onClick={() =>
-                    openList(
-                      "unpaid"
-                    )
-                  }
+                  count={unpaidCount}
+                  accent={COLORS.stampRed}
+                  onClick={() => openList("unpaid")}
                 />
 
                 <StatTile
-                  icon={
-                    <BellRing
-                      size={20}
-                    />
-                  }
+                  icon={<BellRing size={20} />}
                   label="مواعيد السداد المستحقة"
-                  count={
-                    dueItems.length
-                  }
-                  accent={
-                    COLORS.stampRed
-                  }
-                  onClick={() =>
-                    openList(
-                      "due"
-                    )
-                  }
+                  count={dueItems.length}
+                  accent={COLORS.stampRed}
+                  onClick={() => openList("due")}
                 />
 
                 <button
-                  onClick={
-                    openAddForm
-                  }
+                  onClick={openAddForm}
                   style={{
                     marginTop: 10,
-                    display:
-                      "flex",
-                    alignItems:
-                      "center",
-                    justifyContent:
-                      "center",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     gap: 8,
-                    background:
-                      COLORS.ink,
-                    color:
-                      COLORS.paper,
-                    border:
-                      "none",
+                    background: COLORS.ink,
+                    color: COLORS.paper,
+                    border: "none",
                     borderRadius: 10,
-                    padding:
-                      "13px",
+                    padding: "13px",
                     fontSize: 15,
-                    fontWeight:
-                      600,
-                    cursor:
-                      "pointer",
+                    fontWeight: 600,
+                    cursor: "pointer",
                   }}
                 >
                   <Plus size={18} />
                   إضافة مستفيد جديد
                 </button>
 
-                {items.length ===
-                  0 && (
+                {items.length === 0 && (
                   <div
                     style={{
-                      textAlign:
-                        "center",
-                      color:
-                        COLORS.inkSoft,
+                      textAlign: "center",
+                      color: COLORS.inkSoft,
                       fontSize: 13,
                       marginTop: 20,
                       lineHeight: 1.8,
                     }}
                   >
-                    ما فيه مستفيدين
-                    مسجلين بعد.
+                    ما فيه مستفيدين مسجلين بعد.
                     <br />
-                    ابدأ بإضافة أول
-                    مستفيد.
+                    ابدأ بإضافة أول مستفيد.
                   </div>
                 )}
               </DotPaper>
             </div>
           )}
 
-          {/* القائمة */}
           {view === "list" && (
             <div>
               <TopBar
-                title={
-                  filterTitle
-                }
-                onBack={() =>
-                  setView(
-                    "home"
-                  )
-                }
+                title={filterTitle}
+                onBack={() => setView("home")}
               />
 
               <DotPaper
                 style={{
                   padding: 16,
-                  display:
-                    "flex",
-                  flexDirection:
-                    "column",
+                  display: "flex",
+                  flexDirection: "column",
                   gap: 10,
                 }}
               >
-                {listItems.length ===
-                  0 && (
+                {listItems.length === 0 && (
                   <div
                     style={{
-                      textAlign:
-                        "center",
-                      color:
-                        COLORS.inkSoft,
+                      textAlign: "center",
+                      color: COLORS.inkSoft,
                       fontSize: 13,
                       marginTop: 30,
                     }}
                   >
-                    لا يوجد أحد بهذي
-                    القائمة
+                    لا يوجد أحد بهذي القائمة
                   </div>
                 )}
 
-                {listItems.map(
-                  (it) => {
-                    const profit =
-                      Number(
-                        it.toReturn
-                      ) -
-                      Number(
-                        it.given
-                      );
+                {listItems.map((it) => {
+                  const profit =
+                    Number(it.toReturn) -
+                    Number(it.given);
 
-                    return (
-                      <button
-                        key={it.id}
-                        onClick={() =>
-                          openDetail(
-                            it.id
-                          )
-                        }
+                  return (
+                    <button
+                      key={it.id}
+                      onClick={() =>
+                        openDetail(it.id)
+                      }
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        background: "#FFFDF6",
+                        border:
+                          `1px solid ${COLORS.paperLine}`,
+                        borderRadius: 10,
+                        padding: "13px 14px",
+                        cursor: "pointer",
+                        textAlign: "right",
+                      }}
+                    >
+                      <Stamp
+                        paid={it.paid}
+                        size={40}
+                      />
+
+                      <div
                         style={{
-                          display:
-                            "flex",
-                          alignItems:
-                            "center",
-                          gap: 12,
-                          background:
-                            "#FFFDF6",
-                          border:
-                            `1px solid ${COLORS.paperLine}`,
-                          borderRadius: 10,
-                          padding:
-                            "13px 14px",
-                          cursor:
-                            "pointer",
-                          textAlign:
-                            "right",
+                          flex: 1,
+                          minWidth: 0,
                         }}
                       >
-                        <Stamp
-                          paid={
-                            it.paid
-                          }
-                          size={40}
-                        />
+                        <div
+                          style={{
+                            fontSize: 15,
+                            fontWeight: 600,
+                            color: COLORS.ink,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {it.name}
+                        </div>
 
                         <div
                           style={{
-                            flex: 1,
-                            minWidth: 0,
+                            fontSize: 12,
+                            color: COLORS.inkSoft,
+                            marginTop: 2,
                           }}
                         >
-                          <div
-                            style={{
-                              fontSize: 15,
-                              fontWeight:
-                                600,
-                              color:
-                                COLORS.ink,
-                              whiteSpace:
-                                "nowrap",
-                              overflow:
-                                "hidden",
-                              textOverflow:
-                                "ellipsis",
-                            }}
-                          >
-                            {it.name}
-                          </div>
-
-                          <div
-                            style={{
-                              fontSize: 12,
-                              color:
-                                COLORS.inkSoft,
-                              marginTop: 2,
-                            }}
-                          >
-                            معطى{" "}
-                            {money(
-                              it.given
-                            )}{" "}
-                            ·{" "}
-                            {it.paid
-                              ? `ربح ${money(
-                                  profit
-                                )}`
-                              : "بانتظار السداد"}
-                          </div>
-
-                          {!it.paid &&
-                            it.dueDate && (
-                              <div
-                                style={{
-                                  fontSize: 11,
-                                  marginTop: 3,
-                                  fontWeight: 700,
-                                  color:
-                                    dueColor(
-                                      it.dueDate
-                                    ),
-                                }}
-                              >
-                                {dueLabel(
-                                  it.dueDate
-                                )}
-                              </div>
-                            )}
+                          معطى {money(it.given)} ·{" "}
+                          {it.paid
+                            ? `ربح ${money(profit)}`
+                            : "بانتظار السداد"}
                         </div>
 
-                        <ChevronRight
-                          size={18}
-                          color={
-                            COLORS.inkSoft
-                          }
-                          style={{
-                            transform:
-                              "rotate(180deg)",
-                          }}
-                        />
-                      </button>
-                    );
-                  }
-                )}
+                        {!it.paid &&
+                          it.dueDate && (
+                            <div
+                              style={{
+                                fontSize: 11,
+                                marginTop: 3,
+                                fontWeight: 700,
+                                color: dueColor(
+                                  it.dueDate
+                                ),
+                              }}
+                            >
+                              {dueLabel(
+                                it.dueDate
+                              )}
+                            </div>
+                          )}
+                      </div>
+
+                      <ChevronRight
+                        size={18}
+                        color={COLORS.inkSoft}
+                        style={{
+                          transform:
+                            "rotate(180deg)",
+                        }}
+                      />
+                    </button>
+                  );
+                })}
               </DotPaper>
             </div>
           )}
 
-          {/* التفاصيل */}
-          {view === "detail" &&
-            selected && (
-              <div>
-                <TopBar
-                  title="تفاصيل المستفيد"
-                  onBack={() =>
-                    setView(
-                      "list"
-                    )
-                  }
-                  right={
-                    <button
-                      onClick={() =>
-                        openEditForm(
-                          selected
-                        )
-                      }
-                      style={{
-                        background:
-                          "none",
-                        border:
-                          "none",
-                        color:
-                          COLORS.paper,
-                        cursor:
-                          "pointer",
-                      }}
-                    >
-                      <Pencil
-                        size={18}
-                      />
-                    </button>
-                  }
-                />
-
-                <DotPaper
-                  style={{
-                    padding: 20,
-                  }}
-                >
-                  <div
+          {view === "detail" && selected && (
+            <div>
+              <TopBar
+                title="تفاصيل المستفيد"
+                onBack={() => setView("list")}
+                right={
+                  <button
+                    onClick={() =>
+                      openEditForm(selected)
+                    }
                     style={{
-                      display:
-                        "flex",
-                      flexDirection:
-                        "column",
-                      alignItems:
-                        "center",
-                      marginBottom: 20,
+                      background: "none",
+                      border: "none",
+                      color: COLORS.paper,
+                      cursor: "pointer",
                     }}
                   >
-                    <Stamp
-                      paid={
-                        selected.paid
-                      }
-                      size={72}
-                    />
+                    <Pencil size={18} />
+                  </button>
+                }
+              />
 
-                    <div
-                      style={{
-                        fontFamily:
-                          "'Rakkas', serif",
-                        fontSize: 24,
-                        color:
-                          COLORS.ink,
-                        marginTop: 12,
-                      }}
-                    >
-                      {
-                        selected.name
-                      }
-                    </div>
+              <DotPaper
+                style={{
+                  padding: 20,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    marginBottom: 20,
+                  }}
+                >
+                  <Stamp
+                    paid={selected.paid}
+                    size={72}
+                  />
 
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color:
-                          COLORS.inkSoft,
-                        marginTop: 4,
-                      }}
-                    >
-                      {
-                        selected.date
-                      }{" "}
-                      ·{" "}
-                      {selected.paid
-                        ? "تم السداد"
-                        : "لم يتم السداد"}
-                    </div>
-
-                    {selected.dueDate &&
-                      !selected.paid && (
-                        <div
-                          style={{
-                            marginTop: 12,
-                            background:
-                              isDueOrOverdue(
-                                selected
-                              )
-                                ? "#FBEAE6"
-                                : "#FFFDF6",
-                            border:
-                              `1.5px solid ${dueColor(
-                                selected.dueDate
-                              )}`,
-                            borderRadius: 10,
-                            padding:
-                              "10px 16px",
-                            display:
-                              "flex",
-                            alignItems:
-                              "center",
-                            gap: 8,
-                            fontSize: 14,
-                            fontWeight: 700,
-                            color:
-                              dueColor(
-                                selected.dueDate
-                              ),
-                          }}
-                        >
-                          {isDueOrOverdue(
-                            selected
-                          ) && (
-                            <BellRing
-                              size={16}
-                            />
-                          )}
-
-                          <span>
-                            {dueLabel(
-                              selected.dueDate
-                            )}
-                          </span>
-
-                          <span
-                            style={{
-                              fontWeight:
-                                400,
-                              fontSize: 12,
-                              color:
-                                COLORS.inkSoft,
-                            }}
-                          >
-                            (
-                            {
-                              selected.dueDate
-                            }
-                            )
-                          </span>
-                        </div>
-                      )}
+                  <div
+                    style={{
+                      fontFamily:
+                        "'Rakkas', serif",
+                      fontSize: 24,
+                      color: COLORS.ink,
+                      marginTop: 12,
+                    }}
+                  >
+                    {selected.name}
                   </div>
 
                   <div
                     style={{
-                      background:
-                        "#FFFDF6",
+                      fontSize: 12,
+                      color: COLORS.inkSoft,
+                      marginTop: 4,
+                    }}
+                  >
+                    {selected.date} ·{" "}
+                    {selected.paid
+                      ? "تم السداد"
+                      : "لم يتم السداد"}
+                  </div>
+
+                  {selected.dueDate &&
+                    !selected.paid && (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          background:
+                            isDueOrOverdue(
+                              selected
+                            )
+                              ? "#FBEAE6"
+                              : "#FFFDF6",
+                          border:
+                            `1.5px solid ${dueColor(
+                              selected.dueDate
+                            )}`,
+                          borderRadius: 10,
+                          padding: "10px 16px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontSize: 14,
+                          fontWeight: 700,
+                          color: dueColor(
+                            selected.dueDate
+                          ),
+                        }}
+                      >
+                        {isDueOrOverdue(
+                          selected
+                        ) && (
+                          <BellRing size={16} />
+                        )}
+
+                        <span>
+                          {dueLabel(
+                            selected.dueDate
+                          )}
+                        </span>
+
+                        <span
+                          style={{
+                            fontWeight: 400,
+                            fontSize: 12,
+                            color: COLORS.inkSoft,
+                          }}
+                        >
+                          ({selected.dueDate})
+                        </span>
+                      </div>
+                    )}
+                </div>
+
+                <div
+                  style={{
+                    background: "#FFFDF6",
+                    border:
+                      `1px solid ${COLORS.paperLine}`,
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    marginBottom: 16,
+                  }}
+                >
+                  <Row
+                    label="المبلغ المعطى"
+                    value={money(selected.given)}
+                    color={COLORS.goldDeep}
+                  />
+
+                  <Row
+                    label="المبلغ الذي سيرجع"
+                    value={money(selected.toReturn)}
+                    color={COLORS.ink}
+                  />
+
+                  {selected.paid ? (
+                    <Row
+                      label="الربح"
+                      value={money(
+                        Number(selected.toReturn) -
+                          Number(selected.given)
+                      )}
+                      color={COLORS.profit}
+                      last
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        padding: "14px 16px",
+                        fontSize: 12,
+                        color: COLORS.stampMuted,
+                        textAlign: "center",
+                      }}
+                    >
+                      الربح يظهر بعد تحديد تم السداد
+                    </div>
+                  )}
+                </div>
+
+                {selected.notes && (
+                  <div
+                    style={{
+                      background: "#FFFDF6",
                       border:
                         `1px solid ${COLORS.paperLine}`,
                       borderRadius: 12,
-                      overflow:
-                        "hidden",
+                      padding: 14,
                       marginBottom: 16,
+                      fontSize: 14,
+                      color: COLORS.ink,
+                      lineHeight: 1.7,
                     }}
                   >
-                    <Row
-                      label="المبلغ المعطى"
-                      value={money(
-                        selected.given
-                      )}
-                      color={
-                        COLORS.goldDeep
-                      }
-                    />
-
-                    <Row
-                      label="المبلغ الذي سيرجع"
-                      value={money(
-                        selected.toReturn
-                      )}
-                      color={
-                        COLORS.ink
-                      }
-                    />
-
-                    {selected.paid ? (
-                      <Row
-                        label="الربح"
-                        value={money(
-                          Number(
-                            selected.toReturn
-                          ) -
-                            Number(
-                              selected.given
-                            )
-                        )}
-                        color={
-                          COLORS.profit
-                        }
-                        last
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          padding:
-                            "14px 16px",
-                          fontSize: 12,
-                          color:
-                            COLORS.stampMuted,
-                          textAlign:
-                            "center",
-                        }}
-                      >
-                        الربح يظهر بعد تحديد
-                        تم السداد
-                      </div>
-                    )}
-                  </div>
-
-                  {selected.notes && (
                     <div
                       style={{
-                        background:
-                          "#FFFDF6",
-                        border:
-                          `1px solid ${COLORS.paperLine}`,
-                        borderRadius: 12,
-                        padding: 14,
-                        marginBottom: 16,
-                        fontSize: 14,
-                        color:
-                          COLORS.ink,
-                        lineHeight: 1.7,
+                        fontSize: 12,
+                        color: COLORS.inkSoft,
+                        marginBottom: 6,
+                        fontWeight: 600,
                       }}
                     >
-                      <div
-                        style={{
-                          fontSize: 12,
-                          color:
-                            COLORS.inkSoft,
-                          marginBottom: 6,
-                          fontWeight: 600,
-                        }}
-                      >
-                        ملاحظات
-                      </div>
-
-                      {
-                        selected.notes
-                      }
+                      ملاحظات
                     </div>
-                  )}
 
-                  <button
-                    onClick={() =>
-                      togglePaid(
-                        selected.id
-                      )
-                    }
-                    style={{
-                      width: "100%",
-                      background:
-                        selected.paid
-                          ? "transparent"
-                          : COLORS.profit,
-                      color:
-                        selected.paid
-                          ? COLORS.profit
-                          : "#FFFDF6",
-                      border:
-                        `1.5px solid ${COLORS.profit}`,
-                      borderRadius: 10,
-                      padding:
-                        "13px",
-                      fontSize: 15,
-                      fontWeight:
-                        600,
-                      cursor:
-                        "pointer",
-                      marginBottom: 10,
-                    }}
-                  >
-                    {selected.paid
-                      ? "تراجع عن السداد"
-                      : "تحديد كمسدد"}
-                  </button>
+                    {selected.notes}
+                  </div>
+                )}
 
-                  <button
-                    onClick={() =>
-                      deleteItem(
-                        selected.id
-                      )
-                    }
-                    style={{
-                      width: "100%",
-                      background:
-                        "transparent",
-                      color:
-                        COLORS.stampRed,
-                      border:
-                        "none",
-                      padding:
-                        "10px",
-                      fontSize: 14,
-                      display:
-                        "flex",
-                      alignItems:
-                        "center",
-                      justifyContent:
-                        "center",
-                      gap: 6,
-                      cursor:
-                        "pointer",
-                    }}
-                  >
-                    <Trash2
-                      size={15}
-                    />
-                    حذف المستفيد
-                  </button>
-                </DotPaper>
-              </div>
-            )}
+                <button
+                  onClick={() =>
+                    togglePaid(selected.id)
+                  }
+                  style={{
+                    width: "100%",
+                    background: selected.paid
+                      ? "transparent"
+                      : COLORS.profit,
+                    color: selected.paid
+                      ? COLORS.profit
+                      : "#FFFDF6",
+                    border:
+                      `1.5px solid ${COLORS.profit}`,
+                    borderRadius: 10,
+                    padding: "13px",
+                    fontSize: 15,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    marginBottom: 10,
+                  }}
+                >
+                  {selected.paid
+                    ? "تراجع عن السداد"
+                    : "تحديد كمسدد"}
+                </button>
 
-          {/* إضافة / تعديل */}
+                <button
+                  onClick={() =>
+                    deleteItem(selected.id)
+                  }
+                  style={{
+                    width: "100%",
+                    background: "transparent",
+                    color: COLORS.stampRed,
+                    border: "none",
+                    padding: "10px",
+                    fontSize: 14,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  <Trash2 size={15} />
+                  حذف المستفيد
+                </button>
+              </DotPaper>
+            </div>
+          )}
+
           {view === "form" && (
             <div>
               <TopBar
@@ -2125,14 +1870,10 @@ export default function App() {
                       )
                     }
                     style={{
-                      background:
-                        "none",
-                      border:
-                        "none",
-                      color:
-                        COLORS.paper,
-                      cursor:
-                        "pointer",
+                      background: "none",
+                      border: "none",
+                      color: COLORS.paper,
+                      cursor: "pointer",
                     }}
                   >
                     <X size={18} />
@@ -2147,18 +1888,12 @@ export default function App() {
               >
                 <Field label="اسم المستفيد">
                   <input
-                    style={
-                      inputStyle
-                    }
-                    value={
-                      form.name
-                    }
+                    style={inputStyle}
+                    value={form.name}
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        name:
-                          e.target
-                            .value,
+                        name: e.target.value,
                       })
                     }
                     placeholder="مدالله العنزي"
@@ -2167,21 +1902,15 @@ export default function App() {
 
                 <Field label="المبلغ المعطى (ريال)">
                   <input
-                    style={
-                      inputStyle
-                    }
-                    value={
-                      form.given
-                    }
+                    style={inputStyle}
+                    value={form.given}
                     inputMode="decimal"
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        given:
-                          toEnglishDigits(
-                            e.target
-                              .value
-                          ),
+                        given: toEnglishDigits(
+                          e.target.value
+                        ),
                       })
                     }
                     placeholder="0"
@@ -2190,21 +1919,15 @@ export default function App() {
 
                 <Field label="المبلغ الذي سيرجع (ريال)">
                   <input
-                    style={
-                      inputStyle
-                    }
-                    value={
-                      form.toReturn
-                    }
+                    style={inputStyle}
+                    value={form.toReturn}
                     inputMode="decimal"
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        toReturn:
-                          toEnglishDigits(
-                            e.target
-                              .value
-                          ),
+                        toReturn: toEnglishDigits(
+                          e.target.value
+                        ),
                       })
                     }
                     placeholder="0"
@@ -2213,19 +1936,13 @@ export default function App() {
 
                 <Field label="التاريخ">
                   <input
-                    style={
-                      inputStyle
-                    }
+                    style={inputStyle}
                     type="date"
-                    value={
-                      form.date
-                    }
+                    value={form.date}
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        date:
-                          e.target
-                            .value,
+                        date: e.target.value,
                       })
                     }
                   />
@@ -2233,19 +1950,13 @@ export default function App() {
 
                 <Field label="موعد السداد (اختياري)">
                   <input
-                    style={
-                      inputStyle
-                    }
+                    style={inputStyle}
                     type="date"
-                    value={
-                      form.dueDate
-                    }
+                    value={form.dueDate}
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        dueDate:
-                          e.target
-                            .value,
+                        dueDate: e.target.value,
                       })
                     }
                   />
@@ -2256,18 +1967,13 @@ export default function App() {
                     style={{
                       ...inputStyle,
                       minHeight: 70,
-                      resize:
-                        "vertical",
+                      resize: "vertical",
                     }}
-                    value={
-                      form.notes
-                    }
+                    value={form.notes}
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        notes:
-                          e.target
-                            .value,
+                        notes: e.target.value,
                       })
                     }
                   />
@@ -2276,8 +1982,7 @@ export default function App() {
                 {error && (
                   <div
                     style={{
-                      color:
-                        COLORS.stampRed,
+                      color: COLORS.stampRed,
                       fontSize: 13,
                       marginBottom: 12,
                     }}
@@ -2287,34 +1992,21 @@ export default function App() {
                 )}
 
                 <button
-                  onClick={
-                    submitForm
-                  }
-                  disabled={
-                    saving
-                  }
+                  onClick={submitForm}
+                  disabled={saving}
                   style={{
                     width: "100%",
-                    background:
-                      COLORS.ink,
-                    color:
-                      COLORS.paper,
-                    border:
-                      "none",
+                    background: COLORS.ink,
+                    color: COLORS.paper,
+                    border: "none",
                     borderRadius: 10,
-                    padding:
-                      "13px",
+                    padding: "13px",
                     fontSize: 15,
-                    fontWeight:
-                      600,
-                    cursor:
-                      saving
-                        ? "default"
-                        : "pointer",
-                    opacity:
-                      saving
-                        ? 0.7
-                        : 1,
+                    fontWeight: 600,
+                    cursor: saving
+                      ? "default"
+                      : "pointer",
+                    opacity: saving ? 0.7 : 1,
                   }}
                 >
                   {saving
@@ -2327,148 +2019,177 @@ export default function App() {
             </div>
           )}
 
-          {/* إدارة الحسابات */}
-          {view === "admin" &&
-            isAdmin && (
-              <div>
-                <TopBar
-                  title="إدارة الحسابات"
-                  onBack={() =>
-                    setView(
-                      "home"
-                    )
-                  }
-                />
+          {view === "admin" && isAdmin && (
+            <div>
+              <TopBar
+                title="إدارة الحسابات"
+                onBack={() => setView("home")}
+              />
 
-                <DotPaper
-                  style={{
-                    padding: 16,
-                  }}
-                >
-                  {pendingUsers.length ===
-                  0 ? (
+              <DotPaper
+                style={{
+                  padding: 16,
+                }}
+              >
+                {adminLoading ? (
+                  <div
+                    style={{
+                      textAlign: "center",
+                      color: COLORS.inkSoft,
+                      fontSize: 13,
+                      marginTop: 30,
+                    }}
+                  >
+                    جارِ جلب طلبات الحسابات...
+                  </div>
+                ) : adminError ? (
+                  <div
+                    style={{
+                      background: "#FBEAE6",
+                      border:
+                        `1px solid ${COLORS.stampRed}`,
+                      borderRadius: 10,
+                      padding: 14,
+                      color: COLORS.stampRed,
+                      fontSize: 13,
+                      lineHeight: 1.7,
+                      direction: "rtl",
+                    }}
+                  >
+                    <strong>
+                      فيه مشكلة في جلب الحسابات
+                    </strong>
+
                     <div
                       style={{
-                        textAlign:
-                          "center",
-                        color:
-                          COLORS.inkSoft,
-                        fontSize: 13,
-                        marginTop: 30,
+                        marginTop: 8,
+                        direction: "ltr",
+                        wordBreak: "break-word",
+                        fontSize: 11,
                       }}
                     >
-                      ما فيه طلبات تسجيل جديدة
-                      بانتظار الموافقة
+                      {adminError}
                     </div>
-                  ) : (
+                  </div>
+                ) : pendingUsers.length === 0 ? (
+                  <div
+                    style={{
+                      textAlign: "center",
+                      color: COLORS.inkSoft,
+                      fontSize: 13,
+                      marginTop: 30,
+                      lineHeight: 1.8,
+                    }}
+                  >
+                    ما فيه طلبات تسجيل جديدة
+                    بانتظار الموافقة
+
                     <div
                       style={{
-                        display:
-                          "flex",
-                        flexDirection:
-                          "column",
-                        gap: 10,
+                        marginTop: 10,
+                        fontSize: 11,
+                        color: COLORS.stampMuted,
                       }}
                     >
-                      {pendingUsers.map(
-                        (u) => (
+                      إذا الحساب موجود في Firestore
+                      و approved = false
+                      المفروض يظهر هنا
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                    }}
+                  >
+                    {pendingUsers.map((u) => (
+                      <div
+                        key={u.uid}
+                        style={{
+                          background: "#FFFDF6",
+                          border:
+                            `1px solid ${COLORS.paperLine}`,
+                          borderRadius: 10,
+                          padding: "13px 14px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        <div
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                          }}
+                        >
                           <div
-                            key={u.uid}
                             style={{
-                              background:
-                                "#FFFDF6",
-                              border:
-                                `1px solid ${COLORS.paperLine}`,
-                              borderRadius: 10,
-                              padding:
-                                "13px 14px",
-                              display:
-                                "flex",
-                              alignItems:
-                                "center",
-                              gap: 10,
+                              fontSize: 14,
+                              fontWeight: 600,
+                              color: COLORS.ink,
+                              direction: "ltr",
+                              textAlign: "right",
+                              wordBreak: "break-word",
                             }}
                           >
-                            <div
-                              style={{
-                                flex: 1,
-                                minWidth: 0,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontSize: 14,
-                                  fontWeight:
-                                    600,
-                                  color:
-                                    COLORS.ink,
-                                  direction:
-                                    "ltr",
-                                  textAlign:
-                                    "right",
-                                }}
-                              >
-                                {
-                                  u.email
-                                }
-                              </div>
-
-                              <div
-                                style={{
-                                  fontSize: 11,
-                                  color:
-                                    COLORS.inkSoft,
-                                  marginTop: 2,
-                                }}
-                              >
-                                بانتظار
-                                الموافقة
-                              </div>
-                            </div>
-
-                            <button
-                              onClick={() =>
-                                approveUser(
-                                  u.uid
-                                )
-                              }
-                              style={{
-                                background:
-                                  COLORS.profit,
-                                color:
-                                  "#FFFDF6",
-                                border:
-                                  "none",
-                                borderRadius: 8,
-                                padding:
-                                  "9px 14px",
-                                fontSize: 13,
-                                fontWeight:
-                                  600,
-                                display:
-                                  "flex",
-                                alignItems:
-                                  "center",
-                                gap: 6,
-                                cursor:
-                                  "pointer",
-                              }}
-                            >
-                              <UserCheck
-                                size={
-                                  15
-                                }
-                              />
-                              موافقة
-                            </button>
+                            {u.email || "بدون إيميل"}
                           </div>
-                        )
-                      )}
-                    </div>
-                  )}
-                </DotPaper>
-              </div>
-            )}
+
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: COLORS.inkSoft,
+                              marginTop: 2,
+                            }}
+                          >
+                            بانتظار الموافقة
+                          </div>
+
+                          <div
+                            style={{
+                              fontSize: 9,
+                              color: COLORS.stampMuted,
+                              marginTop: 4,
+                              direction: "ltr",
+                              wordBreak: "break-all",
+                            }}
+                          >
+                            UID: {u.uid}
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            approveUser(u.uid)
+                          }
+                          style={{
+                            background:
+                              COLORS.profit,
+                            color: "#FFFDF6",
+                            border: "none",
+                            borderRadius: 8,
+                            padding: "9px 14px",
+                            fontSize: 13,
+                            fontWeight: 600,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <UserCheck size={15} />
+                          موافقة
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </DotPaper>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -2485,8 +2206,7 @@ function Row({
     <div
       style={{
         display: "flex",
-        justifyContent:
-          "space-between",
+        justifyContent: "space-between",
         alignItems: "center",
         padding: "14px 16px",
         borderBottom: last
@@ -2497,8 +2217,7 @@ function Row({
       <span
         style={{
           fontSize: 13,
-          color:
-            COLORS.inkSoft,
+          color: COLORS.inkSoft,
         }}
       >
         {label}
