@@ -359,18 +359,25 @@ useEffect(() => {
     const unsub = onAuthStateChanged(
       auth,
       (u) => {
-        clearTimeout(timer);
         setInitError("");
         setUser(u || null);
       },
       (err) => {
-        clearTimeout(timer);
         setInitError(
           err.code ? `${err.code}: ${err.message}` : String(err)
         );
         setUser(null);
       }
     );
+
+    return () => {
+      unsub();
+    };
+  } catch (err) {
+    setInitError(String(err));
+    setUser(null);
+  }
+}, []);
 
     return () => {
       unsub();
