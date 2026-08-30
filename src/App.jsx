@@ -355,11 +355,6 @@ export default function App() {
   }
 
 useEffect(() => {
-  const timer = setTimeout(() => {
-    setSlowLoad(true);
-    setInitError("Firebase Auth لم يستجب خلال 6 ثواني");
-  }, 6000);
-
   try {
     const unsub = onAuthStateChanged(
       auth,
