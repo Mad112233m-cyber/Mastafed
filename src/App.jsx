@@ -1288,8 +1288,7 @@ export default function App() {
                 : "عندك حساب؟ سجل دخول"}
             </button>
           </div>
-        </div>
-      ) : isAdmin ? (
+        </div>) : (isAdmin || (profile && profile.approved)) ? (
         /* =========================
            الأدمن
         ========================= */
