@@ -795,8 +795,12 @@ export default function App() {
   const unpaidCount =
     items.filter((i) => !i.paid).length;
 
-  const dueItems =
-    items.filter(isDueOrOverdue);
+  const dueItems = items.filter(
+  (i) =>
+    !i.paid &&
+    i.dueDate &&
+    daysUntil(i.dueDate) <= 3
+);
 
   // ===============================
   // التنقل
