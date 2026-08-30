@@ -312,6 +312,8 @@ const inputStyle = {
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = loading, null = logged out
   const [profile, setProfile] = useState(undefined); // undefined = loading, null = not found, object = loaded
+  const [initError, setInitError] = useState("");
+  const [slowLoad, setSlowLoad] = useState(false);
   const [authMode, setAuthMode] = useState("login"); // login | signup
   const [authForm, setAuthForm] = useState({ email: "", password: "" });
   const [authError, setAuthError] = useState("");
@@ -353,10 +355,23 @@ export default function App() {
   }
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u || null);
-    });
-    return () => unsub();
+    const timer = setTimeout(() => setSlowLoad(true), 6000);
+    const unsub = onAuthStateChanged(
+      auth,
+      (u) => {
+        clearTimeout(timer);
+        setUser(u || null);
+      },
+      (err) => {
+        clearTimeout(timer);
+        setInitError(err.code ? `${err.code}: ${err.message}` : String(err));
+        setUser(null);
+      }
+    );
+    return () => {
+      unsub();
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -577,6 +592,28 @@ export default function App() {
       {user === undefined ? (
         <div style={{ color: COLORS.paper, textAlign: "center", padding: 60, fontFamily: "'IBM Plex Sans Arabic', sans-serif" }}>
           جارِ التحميل...
+          {slowLoad && (
+            <div style={{ marginTop: 20, fontSize: 12, color: "#E4A0A0", lineHeight: 1.9 }}>
+              الاتصال يأخذ وقت أطول من المعتاد.
+              {initError && <div style={{ marginTop: 8, direction: "ltr", fontSize: 11, wordBreak: "break-word" }}>{initError}</div>}
+              <div style={{ marginTop: 14 }}>
+                <button
+                  onClick={() => window.location.reload()}
+                  style={{
+                    background: "rgba(244,238,220,0.1)",
+                    border: "none",
+                    color: COLORS.paper,
+                    borderRadius: 8,
+                    padding: "8px 16px",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  إعادة المحاولة
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ) : !user ? (
         <div
