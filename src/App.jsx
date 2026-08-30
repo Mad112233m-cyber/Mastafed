@@ -970,7 +970,12 @@ export default function App() {
       : filter === "unpaid"
       ? items.filter((i) => !i.paid)
       : filter === "due"
-      ? items.filter(isDueOrOverdue)
+      ? items.filter(
+    (i) =>
+      !i.paid &&
+      i.dueDate &&
+      daysUntil(i.dueDate) <= 3
+  )
       : items;
 
   const filterTitle =
