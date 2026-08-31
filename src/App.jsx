@@ -1362,8 +1362,9 @@ export default function App() {
                   >
                     <LogOut size={13} />
                     خروج
-                  </button>
-
+                  </button>  
+                  
+                 {user?.email?.toLowerCase() === "mad112233m@hotmail.com" && (
                   <button
                     onClick={() =>
                       setView("admin")
@@ -1407,7 +1408,8 @@ export default function App() {
                       0 &&
                       ` (${pendingUsers.length})`}
                   </button>
-
+                   )}
+                  
                   <div
                     style={{
                       textAlign:
